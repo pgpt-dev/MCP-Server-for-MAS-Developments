@@ -1,4 +1,6 @@
 ![PrivateGPT MCP Server](docs/images/pGPT-MCP.png)
+[![smithery badge](https://smithery.ai/badge/@pgpt-dev/MCP-Server-for-MAS-Developments)](https://smithery.ai/server/@pgpt-dev/MCP-Server-for-MAS-Developments)
+
 
 ## Table of Contents
 - [**PrivateGPT MCP Server**](#privategpt-mcp-server)
@@ -47,9 +49,11 @@
   - [Example Use Cases](#example-use-cases)
   - [How to Use](#how-to-use)
 - [**Installation**](#installation)
-  - [Prerequisites](#prerequisites)
-  - [Install Dependencies](#install-dependencies)
-  - [Build the Project](#build-the-project)
+  - [Installing via Smithery](#installing-via-smithery)
+  - [Installing manually or automatically](#installing-manually-or-automatically)
+    - [Prerequisites](#prerequisites)
+    - [Install Dependencies](#install-dependencies)
+    - [Build the Project](#build-the-project)
 - [**Configuration Description**](#configuration-description)
   - [Proxy Configuration](#proxy-configuration)
     - [Use Proxy](#use-proxy)
@@ -400,6 +404,17 @@ The PGPT Server is a powerful tool for managing structured communication and dat
 
 
 ## Installation
+
+### Installing via Smithery
+
+To install PrivateGPT MCP Server for Claude Desktop automatically via [Smithery](https://smithery.ai/server/@pgpt-dev/MCP-Server-for-MAS-Developments):
+
+```bash
+npx -y @smithery/cli install @pgpt-dev/MCP-Server-for-MAS-Developments --client claude
+```
+
+### Installing manually or automatically
+
 1. Clone the repository:
 ```bash
 git clone https://github.com/pgpt-dev/MCP-Server-for-MAS-Developments.git
