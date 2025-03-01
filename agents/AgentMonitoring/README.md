@@ -1,13 +1,3 @@
-Nachfolgend findest du eine ausführliche **README.md**, die beschreibt, wie du **drei verschiedene Agenten** (1) den **OpenAI-Compatible API Agent**, (2) den **Chatbot Agent** und (3) den **IoT MQTT Agent** im Hinblick auf **Prometheus**-Monitoring und **Grafana**-Dashboards einrichten kannst. Sie geht darauf ein:
-
-- Wie du die **Agents** startest und wo sie ihre `/metrics`-Informationen zur Verfügung stellen.  
-- Wie du in **Prometheus** die `prometheus.yml` anpassen musst, damit es die Metriken aller drei Agenten abfragt.  
-- Wie du in **Grafana** die bereitgestellten **Dashboard-JSONs** importierst, welche Panels enthalten sind und welche Parameter du bei Bedarf anpasst.
-
-Speichere den Inhalt einfach als `README.md` in deinem Repository.  
-
----
-
 # README
 
 ## Übersicht
