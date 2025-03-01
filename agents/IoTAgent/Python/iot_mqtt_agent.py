@@ -8,53 +8,44 @@ import os
 import paramiko
 import shutil
 import argparse
-import posixpath  # Für Remote-Pfade
-import requests  # Für die Kommunikation mit dem Chatbot-Agenten
+import posixpath  # For remote paths
+import requests  # For communication with the chatbot agent
 import sys
 import time
 import warnings
-from .language import languages  # Korrekte Importanweisung
+from .language import languages  # Correct import statement
 from ...AgentInterface.Python.color import Color
+import socket  # For display_startup_header
+import platform  # For display_startup_header
 
-
-import socket  # Für display_startup_header
-import platform  # Für display_startup_header
-
-import signal
-
-def handle_sigint(signum, frame):
-    # Hier Logging oder andere Aufräumarbeiten
-    logging.info("Strg+C erkannt, beende den IoT MQTT Agent jetzt sauber.")
-    # Falls der MQTT-Client global verfügbar ist, kann man ihn hier stoppen
-    # client.loop_stop()
-    # client.disconnect()
-    sys.exit(0)
-
-# Dem Betriebssystem mitteilen, dass diese Funktion bei SIGINT (Strg+C) aufzurufen ist
-signal.signal(signal.SIGINT, handle_sigint)
-
+# Prometheus-Imports
+from prometheus_client import Counter, Histogram, make_wsgi_app
+from wsgiref.simple_server import make_server, WSGIRequestHandler
+import threading
 
 # ───────────────────────────────────────────────────────────────
-# Konstante Spaltenbreiten für saubere Formatierung
+# Constant column widths for clean formatting
 # ───────────────────────────────────────────────────────────────
 TIMESTAMP_WIDTH  = 20
 COMPONENT_WIDTH  = 16
 TAG_WIDTH        = 10
 MESSAGE_WIDTH    = 12
-LABEL_WIDTH      = 30  # Einheitliche Breite für "Received message on topic" etc.
+LABEL_WIDTH      = 30  # Uniform width for "Received message on topic" etc.
 TOPIC_WIDTH      = 40
 PARAMETER_WIDTH  = 35
 VALUE_WIDTH      = 15
 STATUS_WIDTH     = 8
 RESPONSE_WIDTH   = 40
 
-# Funktion zur Formatierung von Text mit fester Breite
+# Function to format text with a fixed width
 def format_text(text: str, width: int, align: str = "<") -> str:
-    """Bringt den Text auf eine feste Breite und richtet ihn aus (links '<', rechts '>')."""
+    """
+    Brings the text to a fixed width and aligns it (left '<', right '>').
+    """
     return f"{text:{align}{width}}"[:width]
 
 # ───────────────────────────────────────────────────────────────
-# Custom Logging Formatter (Emoji + einheitliche Spaltenbreite)
+# Custom Logging Formatter (Emoji + uniform column widths)
 # ───────────────────────────────────────────────────────────────
 class CustomFormatter(logging.Formatter):
     LEVEL_ICONS = {
@@ -89,45 +80,68 @@ def setup_logging(logging_config):
     handler = logging.StreamHandler(sys.stdout)
     handler.setFormatter(formatter)
 
-    # Hier wird basicConfig nur einmal aufgerufen, bevor Logging genutzt wird.
+    # basicConfig is only called once before logging is used.
     logging.basicConfig(level=log_level, handlers=[handler])
 
 if __name__ == "__main__":
     setup_logging({"level": "DEBUG"})
-    # Jetzt können alle weiteren Logging-Aufrufe den benutzerdefinierten Formatter nutzen.
-    # Restlicher Code...
-  
-# Temporäres Filtern der DeprecationWarning (nur als Übergangslösung)
+    # From now on, all subsequent logging calls will use the custom formatter.
+    # Rest of the code...
+
+# Temporary filtering of DeprecationWarning (as a transitional solution)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-# Globale Variable für die aktuelle Sprache
+# Global variable for the current language
 current_language = "en"
 
-# Klasse zur Handhabung von userdata
+# ───────────────────────────────────────────────────────────────
+# Prometheus Metriken definieren
+# ───────────────────────────────────────────────────────────────
+# Zählt eingehende MQTT-Nachrichten
+MQTT_MESSAGE_COUNT = Counter(
+    "mqtt_message_count",
+    "Number of MQTT messages received by IoT agent"
+)
+
+# Misst die Bearbeitungszeit (Sekunden) in on_message
+MQTT_MESSAGE_LATENCY = Histogram(
+    "mqtt_message_latency_seconds",
+    "Time spent processing each MQTT message"
+)
+
+# --------------------------------------------
+# Custom WSGI RequestHandler for Prometheus
+# -> Logs every scrape request
+# --------------------------------------------
+class LoggingWSGIRequestHandler(WSGIRequestHandler):
+    def log_message(self, format, *args):
+        # Erzeugt einen INFO-Logeintrag pro Request
+        logging.info(
+            'Prometheus request: ' + format % args,
+            extra={"component": "metrics", "tag": "scrape", "message_type": "Incoming"}
+        )
+
+# Class for handling userdata
 class UserData:
     def __init__(self, handlers, config):
         self.handlers = handlers
         self.config = config
 
-# Funktion zum Laden der Konfiguration
+# Function to load the configuration
 def load_config(config_path, current_language):
     try:
         with open(config_path, 'r', encoding='utf-8') as config_file:
             config = json.load(config_file)
-        message = languages[current_language]["configuration_loaded"].format(config_path=config_path)
-        #logging.debug(message)
         return config
     except Exception as e:
         message = languages[current_language]["error_loading_config"].format(e=e)
         logging.error(message)
         sys.exit(1)
 
-# Callback-Funktion für den Verbindungsaufbau (angepasst für MQTT v5)
+# Callback function for connection setup (adapted for MQTT v5)
 def on_connect(client, userdata, flags, rc, properties=None):
     global current_language
     if rc == 0:
-        # logging.info(message)
-        message = languages[current_language]["welcome"]
         logging.info(
             "Connected to MQTT broker",
             extra={"component": "mqtt", "tag": "connect", "message_type": "Status"}
@@ -136,18 +150,17 @@ def on_connect(client, userdata, flags, rc, properties=None):
         subscribed_message = f"Subscribed to {userdata.config['mqtt']['topic']}."
         logging.info(Color.color_text(subscribed_message, Color.OKBLUE))
     else:
-        error_message = languages[current_language]["chatbot_error_status"].format(status_code=rc, response="")
         logging.error(
             f"Failed to connect, return code {rc}",
             extra={"component": "mqtt", "tag": "connect", "message_type": "Error"}
         )
-        # logging.error(error_message)
 
-# Callback-Funktion für empfangene Nachrichten (angepasst)
+# Callback function for incoming messages (adapted)
 def on_message(client, userdata, msg):
     global current_language
+    start_time = time.time()  # Für Latenzmessung
+
     try:
-        # Extrahiere Timestamp, Parameter und Payload
         timestamp = datetime.now().isoformat()
         parameter = msg.topic.split('/')[-1]
         payload = msg.payload.decode('utf-8')
@@ -164,63 +177,54 @@ def on_message(client, userdata, msg):
             "value": value
         }
 
-        # Einheitliche Formatierung ohne erzwungene Breiten
         flabel = "Received message on topic"
         ftopic = msg.topic
         fparam = parameter
-        fvalue = payload.strip()  # Entferne unnötige Leerzeichen
+        fvalue = payload.strip()
 
-        # Einheitliche Log-Ausgabe für MQTT-Nachrichten
         logging.info(
-            f"{flabel} | {ftopic} | Parameter: {fparam} | Wert: {fvalue}",
+            f"{flabel} | {ftopic} | Parameter: {fparam} | Value: {fvalue}",
             extra={"component": "mqtt", "tag": "message", "message_type": "Incoming"}
         )
-        # Speichern der JSON-Daten
+
+        # Erhöhe Zähler
+        MQTT_MESSAGE_COUNT.inc()
+
+        # Speichern
         userdata.handlers['json'].append_record(record)
 
-        # Debugging-Statement
-        #logging.debug(f"Calling interpret_and_output with record: {record}, handlers: {userdata.handlers}, config: {userdata.config}")
-
-        # Interpretation und Speicherung der generierten Sätze
         interpret_and_output(record, userdata.handlers, userdata.config)
-                # Einheitliche API-Logging
-         # status_code = format_text(str(response.status_code), STATUS_WIDTH, ">")
-         # response_text = format_text(response.text, RESPONSE_WIDTH)
 
         logging.info(
             f"{ftopic} | Parameter: {fparam} | Value: {fvalue}",
             extra={"component": "chatbot_agent", "tag": "request", "message_type": "Outgoing"}
         )
 
-        # logging.info(
-            # f"{format_text('Chatbot API Request', LABEL_WIDTH)} | {ftopic} | Parameter: {fparam} | Wert: {fvalue}",
-            # extra={"component": "chatbot_agent", "tag": "request", "message_type": "Outgoing"}
-        # )
-
-        mqtt_info = f"MQTT Message received: Topic: {msg.topic} | Payload: {payload}"
-        logging.info(mqtt_info, extra={"component": "mqtt", "tag": "message", "message_type": "Incoming"})
-
     except Exception as e:
         error_message = languages[current_language]["error_in_interpret_and_output"].format(e=e)
         logging.error(error_message)
+    finally:
+        latency = time.time() - start_time
+        MQTT_MESSAGE_LATENCY.observe(latency)
+
 
 class LocalFileHandler:
     """
-    Diese Klasse verwaltet lokale Dateien mit dynamischen, timestamp-basierten Namen.
-    Sie sorgt dafür, dass jede Datei einen eindeutigen Zeitstempel und einen 5-stelligen Zähler im Namen hat.
+    This class manages local files with dynamic, timestamp-based names.
+    It ensures that each file has a unique timestamp and a 5-digit counter in its name.
     """
 
     def __init__(self, base_name, local_dir, file_type, size_limit, remote_subdir, config, language_code):
         """
-        Initialisiert den FileHandler.
+        Initializes the FileHandler.
 
-        :param base_name: Basisname der Datei (z.B. 'mqtt.json', 'translated_text_de.txt')
-        :param local_dir: Lokales Verzeichnis, in dem die Dateien gespeichert werden sollen
-        :param file_type: Typ der Datei ('json', 'txt')
-        :param size_limit: Größenlimit in Bytes
-        :param remote_subdir: Remote-Unterverzeichnis auf dem SFTP-Server
-        :param config: Gesamte Konfigurationsdaten
-        :param language_code: Sprachcode (z.B. 'de', 'en')
+        :param base_name: Base name of the file (e.g. 'mqtt.json', 'translated_text_de.txt')
+        :param local_dir: Local directory where the files will be saved
+        :param file_type: Type of file ('json', 'txt')
+        :param size_limit: Size limit in bytes
+        :param remote_subdir: Remote subdirectory on the SFTP server
+        :param config: Entire configuration data
+        :param language_code: Language code (e.g. 'de', 'en')
         """
         self.base_name = base_name
         self.local_dir = local_dir
@@ -233,9 +237,9 @@ class LocalFileHandler:
 
     def _create_new_file(self):
         """
-        Erstellt eine neue lokale Datei mit einem Zeitstempel und einem Zähler.
+        Creates a new local file with a timestamp and a counter.
 
-        :return: Pfad zur neu erstellten Datei
+        :return: Path to the newly created file
         """
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")  # Format: YYYYMMDDHHMMSS
         if self.file_type == "json":
@@ -262,13 +266,13 @@ class LocalFileHandler:
 
     def _get_next_suffix(self, full_prefix):
         """
-        Ermittelt den nächsten verfügbaren 5-stelligen Suffix.
+        Determines the next available 5-digit suffix.
 
-        :param full_prefix: Vollständiger Prefix inklusive Zeitstempel
-        :return: 5-stelliger Suffix als String oder None, wenn keine verfügbar sind
+        :param full_prefix: Complete prefix including timestamp
+        :return: 5-digit suffix as a string or None if none are available
         """
         try:
-            # Verbinde sich mit SFTP, um vorhandene Suffixe zu ermitteln
+            # Connect to SFTP to determine existing suffixes
             transport = paramiko.Transport((self.config['sftp']['host'], self.config['sftp']['port']))
             transport.connect(username=self.config['sftp']['username'], password=self.config['sftp']['password'])
             sftp = paramiko.SFTPClient.from_transport(transport)
@@ -301,9 +305,9 @@ class LocalFileHandler:
 
     def append_record(self, record):
         """
-        Fügt einen Datensatz zur JSON-Datei hinzu.
+        Adds a data record to the JSON file.
 
-        :param record: Der zu speichernde Datensatz (Dictionary)
+        :param record: The data record to store (dictionary)
         """
         if self.file_type != "json":
             error_message = languages[current_language]["invalid_group"].format(groups=self.file_type)
@@ -328,12 +332,10 @@ class LocalFileHandler:
                 json.dump(data, file, indent=4, ensure_ascii=False)
                 file.truncate()
             record_added_message = languages[current_language]["record_added"].format(file_path=self.current_file_path)
-           # logging.info(record_added_message)
             logging.info(
                 f"{record_added_message}",
                 extra={"component": "iot", "tag": "filesystem", "message_type": "write"}
             )
-
 
             self._check_size_and_rotate()
         except Exception as e:
@@ -342,9 +344,9 @@ class LocalFileHandler:
 
     def append_text(self, text):
         """
-        Fügt einen Text zur Textdatei hinzu.
+        Appends text to the text file.
 
-        :param text: Der zu speichernde Text (String)
+        :param text: The text to store (string)
         """
         if self.file_type != "txt":
             error_message = languages[current_language]["invalid_group"].format(groups=self.file_type)
@@ -363,7 +365,6 @@ class LocalFileHandler:
                 f"{text}",
                 extra={"component": "iot", "tag": "filesystem", "message_type": "write"}
             )
-            #logging.info(languages[current_language]["record_added"].format(file_path=self.current_file_path))
 
             self._check_size_and_rotate()
         except Exception as e:
@@ -372,14 +373,13 @@ class LocalFileHandler:
 
     def _check_size_and_rotate(self):
         """
-        Überprüft die Dateigröße und rotiert die Datei, wenn das Limit erreicht ist.
+        Checks the file size and rotates the file if the limit is reached.
         """
         global current_language
         try:
             if not self.current_file_path:
                 return
             file_size = os.path.getsize(self.current_file_path)
-            #logging.debug(languages[current_language]["file_size"].format(file_path=self.current_file_path, file_size=file_size))
             if file_size >= self.size_limit:
                 logging.info(languages[current_language]["file_limit_reached"].format(file_path=self.current_file_path, size_limit=self.size_limit))
                 success = upload_file(self.current_file_path, self.file_type, self.remote_subdir, self.config)
@@ -390,16 +390,16 @@ class LocalFileHandler:
             error_message = languages[current_language]["error_writing_file"].format(file_path=self.current_file_path, e=e)
             logging.error(error_message)
 
-# Generische Funktion zur SFTP-Übertragung von Dateien mit neuem Namensschema
+# Generic function for SFTP file transfer with a new naming scheme
 def upload_file(file_path, file_type, remote_subdir, config):
     """
-    Überträgt eine Datei via SFTP mit einem Zeitstempel und einem 5-stelligen Suffix im Dateinamen.
+    Transfers a file via SFTP with a timestamp and a 5-digit suffix in the filename.
 
-    :param file_path: Pfad zur lokalen Datei
-    :param file_type: Typ der Datei ('json', 'txt')
-    :param remote_subdir: Remote-Unterverzeichnis auf dem SFTP-Server
-    :param config: Gesamte Konfigurationsdaten
-    :return: True bei Erfolg, False bei Fehler
+    :param file_path: Path to the local file
+    :param file_type: Type of file ('json', 'txt')
+    :param remote_subdir: Remote subdirectory on the SFTP server
+    :param config: Entire configuration data
+    :return: True on success, False on error
     """
     global current_language
     try:
@@ -409,7 +409,7 @@ def upload_file(file_path, file_type, remote_subdir, config):
         transport.connect(username=config['sftp']['username'], password=config['sftp']['password'])
         sftp = paramiko.SFTPClient.from_transport(transport)
 
-        # Remote-Verzeichnis inklusive Unterverzeichnis
+        # Remote directory including subdirectory
         remote_base_dir = posixpath.join(config['sftp']['remote_path'], remote_subdir)
         try:
             sftp.chdir(remote_base_dir)
@@ -421,18 +421,18 @@ def upload_file(file_path, file_type, remote_subdir, config):
             directory_created_message = languages[current_language]["remote_directory_created"].format(remote_base_dir=remote_base_dir)
             #logging.debug(directory_created_message)
 
-        # Bestimmen des Basis-Dateinamens ohne Suffix
-        # Da der lokale Dateiname bereits den Zeitstempel und Suffix enthält, wird er direkt verwendet
+        # Determine the base filename without suffix
+        # Since the local filename already has the timestamp and suffix, use it directly
         remote_file_name = os.path.basename(file_path)
         remote_file_path = posixpath.join(remote_base_dir, remote_file_name)
 
-        # Übertrage die Datei
+        # Transfer the file
         sftp.put(file_path, remote_file_path)
         upload_success_message = languages[current_language]["file_uploaded_successfully"].format(
             file_path=file_path, host=config['sftp']['host'], remote_file_path=remote_file_path)
         logging.info(upload_success_message)
 
-        # Schließe die SFTP-Verbindung
+        # Close the SFTP connection
         sftp.close()
         transport.close()
         finished_uploading_message = languages[current_language]["finished_uploading_file"].format(file_path=file_path)
@@ -443,7 +443,7 @@ def upload_file(file_path, file_type, remote_subdir, config):
         logging.error(error_message)
         return False
 
-# Funktion zur Archivierung der Datei nach der Übertragung
+# Function to archive the file after transfer
 def archive_file(file_path):
     global current_language
     try:
@@ -456,23 +456,23 @@ def archive_file(file_path):
         error_message = languages[current_language]["error_archiving_file"].format(file_path=file_path, e=e)
         logging.error(error_message)
 
-# Funktion zur Generierung eines logischen Satzes über den Chatbot-Agenten mit Retry-Mechanismus
+# Function to generate a logical sentence via the chatbot agent with a retry mechanism
 def generate_logical_sentence(parameters, language_code, config, wait_seconds=5):
     """
-    Sendet die Parameter an den Chatbot-Agenten in Form einer FIPA-ACL-Anfrage und erhält einen logischen Satz.
-    Falls eine FIPA-ACL failure-Nachricht empfangen wird (z. B. wegen Verbindungsproblemen), wird ausgegeben,
-    dass der Chatbot-Agent ein Problem meldet und der IoT-Agent wartet, bis eine OK-Antwort kommt.
-    Sobald eine OK-Antwort empfangen wird, wird zusätzlich ausgegeben, dass das Problem behoben ist.
+    Sends the parameters to the chatbot agent in the form of a FIPA-ACL request and receives a logical sentence.
+    If a FIPA-ACL failure message is received (e.g. due to connection problems), it is logged that
+    the chatbot agent reports a problem and the IoT agent waits until an OK answer is received.
+    Once an OK answer is received, it is also logged that the problem has been resolved.
     """
     while True:
         try:
-            # Erstellen des Prompts aus den Parametern
+            # Create the prompt from the parameters
             prompt = (
-                "Erstelle einen logischen Satz aus den folgenden JSON-Parametern:\n" +
+                "Create a logical sentence from the following JSON parameters:\n" +
                 json.dumps(parameters, ensure_ascii=False, indent=4)
             )
 
-            # Aufbau der FIPA-ACL-Anfrage
+            # Build the FIPA-ACL request
             acl_payload = {
                 "performative": "request",
                 "sender": "IoT_MQTT_Agent",
@@ -500,93 +500,84 @@ def generate_logical_sentence(parameters, language_code, config, wait_seconds=5)
             )
             data = response.json()
 
-            status_code = response.status_code  # Extrahiere den HTTP-Statuscode
-            data = response.json()  # Versuche die JSON-Antwort zu parsen
-            response_text = json.dumps(data, ensure_ascii=False, indent=2)  # JSON formatieren für das Logging
+            status_code = response.status_code
+            data = response.json()  # Attempt to parse the JSON response
+            response_text = json.dumps(data, ensure_ascii=False, indent=2)  # For logging
 
-            # Einheitliche Formatierung
+            # Uniform formatting
             flabel = format_text("Chatbot API Response", LABEL_WIDTH)
 
-            # Extrahiere nur den Inhalt des "answer"-Schlüssels, falls vorhanden
-            answer_text = data.get("answer", "No answer received").strip('"')  # Entfernt ggf. überflüssige Anführungszeichen
+            # Extract only the content of the "answer" key, if present
+            answer_text = data.get("answer", "No answer received").strip('"')
 
             logging.info(
                 f"{answer_text}",
                 extra={"component": "chatbot_agent", "tag": "response", "message_type": "Incoming"}
             )
 
-            
-            # logging.info(
-                # f"{flabel} | Status: {status_code} | Response: {response_text}",
-                # extra={"component": "chatbot_agent", "tag": "response", "message_type": "Incoming"}
-            # )
-            
-            
-            # Einheitliche Formatierung
-            # flabel = format_text("Received message on topic", LABEL_WIDTH)
-            # ftopic = format_text(msg.topic, TOPIC_WIDTH)
-            # fparam = format_text(parameter, PARAMETER_WIDTH)
-            # fvalue = format_text(payload, VALUE_WIDTH, ">")
-
-            # logging.info(
-                # f"{format_text('Chatbot API Response', LABEL_WIDTH)} | {ftopic} | Status: {status_code} | Response: {response}",
-                # extra={"component": "chatbot_agent", "tag": "response", "message_type": "Incoming"}
-            # )
-        
-            # Prüfen, ob der Chatbot-Agent ein Failure sendet
+            # Check if the chatbot agent sends a failure
             if data.get("performative") == "failure":
                 reason = data.get("content", {}).get("reason", "Unknown reason.")
-                error_msg = f"ChatBot Agent reports a problem: {reason}. Waiting for recovery..."
+                # Shorten or remove duplicates in the message:
+                reason_short = reason.replace("Could not connect to MCP server: ", "")
+                # Limit overly long messages to e.g. 80 characters:
+                max_len = 80
+                if len(reason_short) > max_len:
+                    reason_short = reason_short[:max_len] + "..."
+
+                error_msg = f"ChatBot Agent reports a problem: {reason_short}. Waiting for recovery..."
                 logging.error(error_msg)
                 time.sleep(wait_seconds)
-                continue  # Wiederhole die Anfrage
+                continue
 
-            # Falls keine Failure vorliegt, wird der erwartete Satz aus dem Feld "answer" entnommen.
+            # If no failure is present, the expected sentence is taken from the "answer" field.
             generated_sentence = data.get("answer", "")
             if not generated_sentence:
                 raise ValueError("Empty 'answer' field in normal response.")
-            
-            # Ausgabe, dass nun ein OK empfangen wurde und das Problem behoben ist.
+
+            # Log that an OK was received and the problem is resolved.
             ok_msg = "OK response received. Stable connection."
             logging.info(ok_msg)
 
             return generated_sentence
-            
-        except KeyboardInterrupt:
-            # Sobald Strg+C gedrückt wird, wollen wir wirklich abbrechen.
-            # -> Also re-raise, damit der Code bis "main" hochgeht.
-            raise
+
         except (requests.exceptions.Timeout, requests.exceptions.ConnectionError, ValueError) as e:
-            logging.error(f"Error during request: {e}. Waiting for Recovery...")
+            # e might contain [WinError 10061], etc.
+            # We shorten the string as needed:
+            e_str = str(e)
+            max_len = 80
+            if len(e_str) > max_len:
+                e_str = e_str[:max_len] + "..."
+            logging.error(f"Error during request: {e_str}. Waiting for retry...")
             time.sleep(wait_seconds)
         except Exception as e:
-            logging.error(f"Unexpected error: {e}. Waiting for Recovery...")
+            logging.error(f"Unexpected error: {e}. Waiting for retry...")
             time.sleep(wait_seconds)
 
-
-# Funktion zur Generierung lesbarer Sätze basierend auf konfigurierten Sprachen
+# Function to generate readable sentences based on configured languages
 def interpret_and_output(record, local_handlers, config):
     global current_language
     try:
         try:
-            timestamp = datetime.fromisoformat(record["timestamp"]).strftime("%d-%m-%Y um %H:%M:%S")
+            timestamp = datetime.fromisoformat(record["timestamp"]).strftime("%d-%m-%Y at %H:%M:%S")
         except ValueError:
-            timestamp = record["timestamp"]  # Falls das Format nicht korrekt ist
+            # If format is incorrect, just take the original
+            timestamp = record["timestamp"]
             warning_message = languages[current_language]["file_empty_or_corrupted"].format(file_path=record["timestamp"])
             logging.warning(warning_message)
 
-        vehicle = record.get("vehicle", "Unbekanntes Fahrzeug")
-        parameter = record.get("parameter", "unbekannt")
-        value = record.get("value", "nicht verfügbar")
+        vehicle = record.get("vehicle", "Unknown vehicle")
+        parameter = record.get("parameter", "unknown")
+        value = record.get("value", "not available")
 
-        # Iteriere durch die konfigurierten Sprachen
+        # Iterate over the configured languages
         for language_code in config.get("languages", ["de", "en"]):
             if language_code not in config['files']['translated_text_files']:
                 error_message = languages[current_language]["no_translation_file_configured"].format(language=language_code)
                 logging.error(error_message)
                 continue
 
-            # Definiere die Parameter basierend auf der Sprache
+            # Define parameters based on the language
             if language_code == "de":
                 parameters = {
                     "Zeitpunkt": timestamp,
@@ -606,32 +597,28 @@ def interpret_and_output(record, local_handlers, config):
                 logging.warning(warning_message)
                 continue
 
-            # Generieren des Satzes
+            # Generate the sentence
             generated_sentence = generate_logical_sentence(parameters, language_code, config)
 
             if generated_sentence:
-                # Bestimmen der vollen Sprachbezeichnung
+                # Determine the full language name
                 if language_code == "de":
-                    language_full = "Deutsch"
+                    language_full = "German"
                 elif language_code == "en":
                     language_full = "English"
                 else:
                     language_full = language_code.upper()
 
-                # Loggen und Ausgeben des Satzes
-                sentence_message = languages[current_language]["language_sentence_generated"].format(language_full=language_full, sentence=generated_sentence)
-                #logging.info(sentence_message)
-                # logging.info(
-                    # f"{format_text('Chatbot API Response', LABEL_WIDTH)} | {ftopic} | Status: {status_code} | Response: {sentence_message}",
-                    # extra={"component": "chatbot_agent", "tag": "sentence_message", "message_type": "Incoming"}
-                # )
-           
+                # Log and display the sentence
+                sentence_message = languages[current_language]["language_sentence_generated"].format(
+                    language_full=language_full, sentence=generated_sentence
+                )
                 logging.info(
                     f"{generated_sentence}",
                     extra={"component": "chatbot_agent", "tag": "sentence_message", "message_type": "Incoming"}
                 )
-                
-                # Speichern des Satzes in der entsprechenden Textdatei
+
+                # Store the sentence in the corresponding text file
                 handler_key = f"{language_code}_txt"
                 if handler_key in local_handlers:
                     local_handlers[handler_key].append_text(generated_sentence)
@@ -639,11 +626,11 @@ def interpret_and_output(record, local_handlers, config):
                     file_handler_error_message = languages[current_language]["no_file_handler_found"].format(language=language_code)
                     logging.error(file_handler_error_message)
             else:
-                # Bestimmen der vollen Sprachbezeichnung
+                # Determine the full language name
                 if language_code == "de":
-                    language_full = "Deutsch"
+                    language_full = "German"
                 elif language_code == "en":
-                    language_full = "Englisch"
+                    language_full = "English"
                 else:
                     language_full = language_code.upper()
                 no_sentence_message = languages[current_language]["no_sentence_generated"].format(language_full=language_full)
@@ -654,7 +641,6 @@ def interpret_and_output(record, local_handlers, config):
 
 def display_startup_header(config):
     global current_language
-    # Extrahiere Server-IP und Port aus der API-URL
     api_url = config.get("chatbot_agent", {}).get("api_url", "http://0.0.0.0:5001/ask")
     try:
         server_ip = api_url.split("//")[-1].split(":")[0]
@@ -684,42 +670,60 @@ Logs:
 ────────────────────────────────────────────────
 🚀 Ready to serve requests!
 """
+    print(header)
+    logging.info("Startup header displayed.", extra={"component": "Startup", "tag": "HEADER", "message_type": "Info"})
 
-# Hauptfunktion
 def main():
-    global current_language  # Globale Variable für die aktuelle Sprache
+    global current_language  # Global variable for the current language
 
-    parser = argparse.ArgumentParser(description="MQTT zu JSON und Satzgenerierung mit SFTP-Übertragung.")
-    parser.add_argument('--config', type=str, default='pgpt_iot_agent.json', help='Pfad zur JSON-Konfigurationsdatei.')
+    parser = argparse.ArgumentParser(description="MQTT to JSON and sentence generation with SFTP transfer.")
+    parser.add_argument('--config', type=str, default='pgpt_iot_agent.json', help='Path to the JSON configuration file.')
     args = parser.parse_args()
 
-    # Temporäres Laden der Konfiguration, um die Sprache zu bestimmen
+    # Temporarily load the config to get the language
     try:
         with open(args.config, 'r', encoding='utf-8') as config_file:
             temp_config = json.load(config_file)
-    except Exception as e:
-        #print(f"Error loading configuration file: {e}")
+    except Exception:
         sys.exit(1)
 
-    # Bestimme die aktuelle Sprache (erste in der Liste)
     languages_list = temp_config.get("languages", ["en"])
     current_language = languages_list[0] if languages_list else "en"
 
-    # Laden der Konfiguration
+    # Load the configuration
     config = load_config(args.config, current_language)
 
-    # Konfigurieren des Loggings
+    # Logging
     log_level = getattr(logging, config['logging'].get('level', 'INFO').upper(), logging.INFO)
+    log_format = config['logging'].get('format', '%(asctime)s - %(levelname)s - %(message)s')
     logging.basicConfig(
         level=log_level,
-        format=config['logging'].get('format', '%(asctime)s - %(levelname)s - %(message)s'),
+        format=log_format,
         handlers=[
             logging.StreamHandler(sys.stdout),
             logging.FileHandler("iot_agent.log", encoding='utf-8')
         ]
     )
 
-    # Initialisiere lokale Dateihandler basierend auf den konfigurierten Sprachen
+    # Start Prometheus (custom WSGI) in extra Thread
+    def start_prometheus_if_configured(cfg):
+        if 'metrics' in cfg and 'port' in cfg['metrics']:
+            prom_port = cfg['metrics']['port']
+            logging.info(f"Starting Prometheus WSGI server on port {prom_port}...",
+                         extra={"component": "metrics", "tag": "start", "message_type": "Info"})
+            # Unsere WSGI-App
+            prometheus_app = make_wsgi_app()
+            # Server instanzieren
+            httpd = make_server('', prom_port, prometheus_app, handler_class=LoggingWSGIRequestHandler)
+            httpd.serve_forever()
+        else:
+            logging.info("No Prometheus 'metrics.port' configured. Skipping metrics server.",
+                         extra={"component": "metrics", "tag": "start", "message_type": "Info"})
+
+    metrics_thread = threading.Thread(target=start_prometheus_if_configured, args=(config,), daemon=True)
+    metrics_thread.start()
+
+    # File handlers
     handlers = {
         'json': LocalFileHandler(
             base_name=config['files']['json_file_name'],
@@ -728,11 +732,9 @@ def main():
             size_limit=config['files']['size_limits']['json'],
             remote_subdir=config['files']['sftp_subdirs']['json'],
             config=config,
-            language_code="json"  # Sprache irrelevant für JSON-Dateien, aber erforderlich für die Klasse
+            language_code="json"
         )
     }
-
-    # Dynamisch Dateihandler für jede konfigurierte Sprache hinzufügen
     for language_code in config.get("languages", ["de", "en"]):
         if language_code in config['files']['translated_text_files']:
             handler_key = f"{language_code}_txt"
@@ -746,52 +748,45 @@ def main():
                 language_code=language_code
             )
         else:
-            error_message = languages[current_language]["no_translation_file_in_config"].format(language=language_code)
-            logging.error(error_message)
+            logging.error(
+                languages[current_language]["no_translation_file_in_config"].format(language=language_code)
+            )
 
-    # Erstellen einer Instanz von UserData
     user_data = UserData(handlers=handlers, config=config)
 
-    # Initialisieren des MQTT-Clients mit MQTTv5 und benutzerdefiniertem userdata
+    # MQTT
     client = mqtt.Client(protocol=mqtt.MQTTv5, userdata=user_data)
     client.username_pw_set(config['mqtt']['username'], config['mqtt']['password'])
     client.on_connect = on_connect
     client.on_message = on_message
 
-    # Anzeige des Startup-Headers
     display_startup_header(config)
 
     try:
-        logging.info(languages[current_language]["start_uploading_file"].format(file_path=config['mqtt']['broker']))
+        broker_info = f"{config['mqtt']['broker']}:{config['mqtt']['port']}"
+        logging.info(f"Connecting to MQTT broker {broker_info}",
+                     extra={"component": "mqtt", "tag": "connect", "message_type": "Info"})
         client.connect(config['mqtt']['broker'], config['mqtt']['port'], 60)
     except Exception as e:
-        error_message = languages[current_language]["error_loading_config"].format(e=e)
-        logging.error(error_message)
+        logging.error(
+            languages[current_language]["error_loading_config"].format(e=e)
+        )
         return
+
     logging.info("Configuration loaded", extra={"component": "config", "tag": "load", "message_type": "Status"})
     client.loop_start()
 
     try:
         while True:
-            time.sleep(1)  # Warte auf Ereignisse
+            time.sleep(1)
     except KeyboardInterrupt:
-        exit_message = languages[current_language]["user_exit"]
         logging.info("Shutting down IoT MQTT Agent", extra={"component": "main", "tag": "shutdown", "message_type": "Status"})
         client.loop_stop()
         client.disconnect()
         sys.exit(0)
-        logging.info(exit_message)
-        print(exit_message)
     finally:
         client.loop_stop()
         client.disconnect()
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-    logging.info("Shutting down IoT MQTT Agent")
-    # hier ggf. client.loop_stop() / client.disconnect()
-    sys.exit(0)
-
-
+    main()

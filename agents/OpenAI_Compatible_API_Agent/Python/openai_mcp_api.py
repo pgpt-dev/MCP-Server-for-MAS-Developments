@@ -1,11 +1,18 @@
 import asyncio
 import logging
+import time
 from pathlib import Path
 from typing import Optional, List
 
 from fastapi import FastAPI, Request, HTTPException, Header, Depends
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
+
+# Prometheus-Client importieren
+from prometheus_client import (
+    Counter, Histogram, Gauge,
+    generate_latest, CONTENT_TYPE_LATEST
+)
 
 # ------------------------------------------------------------------
 #   1) Logging: Log-Level konfigurierbar, Minimalkonfiguration
@@ -21,6 +28,7 @@ logger = logging.getLogger(__name__)
 # ------------------------------------------------------------------
 try:
     from ...AgentInterface.Python.config import Config, ConfigError
+
     config_file = Path(__file__).parent.parent / "pgpt_openai_api_mcp.json"
     config_file = Path.absolute(config_file)
     config = Config(config_file=config_file, required_fields=["email", "password", "mcp_server"])
@@ -85,7 +93,75 @@ async def async_respond(agent: PrivateGPTAgent, messages: List[Message]) -> dict
 app = FastAPI(title="OpenAI-Compatible API for PrivateGPT using MCP")
 
 # ------------------------------------------------------------------
-#   7) Whitelist-Prüfung via Dependency
+#   7) Prometheus-Metriken definieren
+# ------------------------------------------------------------------
+
+# Anzahl eingehender Requests pro Method + Endpoint
+REQUEST_COUNT = Counter(
+    "request_count",
+    "Number of requests received",
+    ["method", "endpoint"]
+)
+
+# Latenz der Requests (Histogram)
+REQUEST_LATENCY = Histogram(
+    "request_latency_seconds",
+    "Request latency in seconds",
+    ["method", "endpoint"]
+)
+
+# Zähler, wie oft Chat-/Completion-Aufrufe erfolgreich waren
+CHAT_COMPLETION_COUNT = Counter(
+    "chat_completion_count",
+    "Number of successful ChatCompletion requests"
+)
+
+COMPLETION_COUNT = Counter(
+    "completion_count",
+    "Number of successful Completions requests"
+)
+
+# Ggf. ein Gauge für "laufende Threads" oder "Queue-Länge", falls relevant
+# (Beispiel: wir nehmen hier einen Dummy-Gauge für aktive Worker)
+ACTIVE_WORKER = Gauge(
+    "active_worker",
+    "Number of active threads in the ThreadPoolExecutor"
+)
+
+# (Optional) Counter für Token, wenn du das aus dem Agent extrahieren kannst:
+TOKEN_USAGE = Counter(
+    "token_usage",
+    "Count of tokens used",
+    ["model"]
+)
+
+# ------------------------------------------------------------------
+#   8) Middleware zum Messen und Zählen der Requests
+# ------------------------------------------------------------------
+@app.middleware("http")
+async def prometheus_middleware(request: Request, call_next):
+    start_time = time.time()
+    
+    # Zähle Request
+    REQUEST_COUNT.labels(request.method, request.url.path).inc()
+    
+    # Schätze aktive Worker
+    #   (Im ThreadPool ist das nicht exakt; man könnte hier "max_workers - free" ermitteln.)
+    ACTIVE_WORKER.set(executor._work_queue.qsize())
+
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        raise exc
+    finally:
+        resp_time = time.time() - start_time
+        # Latenz messen
+        REQUEST_LATENCY.labels(request.method, request.url.path).observe(resp_time)
+
+    return response
+
+# ------------------------------------------------------------------
+#   9) Whitelist-Prüfung via Dependency
 #       -> Gibt bei invalidem Key sofort HTTPException (401) zurück
 # ------------------------------------------------------------------
 def verify_api_key(authorization: str = Header(None)) -> str:
@@ -110,7 +186,7 @@ def verify_api_key(authorization: str = Header(None)) -> str:
     return token
 
 # ------------------------------------------------------------------
-#   8) Chat-Completions Endpoint
+#   10) Chat-Completions Endpoint
 # ------------------------------------------------------------------
 @app.post("/chat/completions")
 async def chat_completions(
@@ -127,19 +203,25 @@ async def chat_completions(
     if not request.messages:
         response = {"chatId": "0", "answer": "No input provided"}
         logger.warning("No messages provided.")
-        # Direkte Sync-Antwort
         return _resp_sync(response, request)
 
-    # Beispiel: asynchrone Agent-Antwort im Thread-Pool
+    # Asynchrone Agent-Antwort
     response = await async_respond(GLOBAL_AGENT, request.messages)
     if "answer" not in response:
         response["answer"] = "No Response received"
 
-    # Etwas Log (vorsichtshalber nur kürzerer Preview):
+    # Metrik hochzählen
+    CHAT_COMPLETION_COUNT.inc()
+
+    # (Optional) Token-Usage-Tracking, falls du im response-Dict Token-Infos hast
+    # Hier beispielhaft: response["usage"]["tokens"] (falls existiert)
+    # if "usage" in response and "tokens" in response["usage"]:
+    #     TOKEN_USAGE.labels(request.model or "unknown_model").inc(response["usage"]["tokens"])
+
     preview_len = 80
     logger.info(f"💡 Response (preview): {response['answer'][:preview_len]}...")
 
-    # Bei stream = True => StreamingResponse
+    # Streaming?
     if request.stream:
         return StreamingResponse(
             _resp_async_generator(response, request),
@@ -149,7 +231,7 @@ async def chat_completions(
         return _resp_sync(response, request)
 
 # ------------------------------------------------------------------
-#   9) Text-Completions Endpoint
+#   11) Text-Completions Endpoint
 # ------------------------------------------------------------------
 @app.post("/completions")
 async def completions(
@@ -163,10 +245,17 @@ async def completions(
         logger.warning("No prompt provided.")
         return _resp_sync(response, request)
 
-    # Asynchron im Thread-Pool (blocking -> non-blocking)
+    # Asynchrone Agent-Antwort
     response = await async_respond(GLOBAL_AGENT, [Message(role="user", content=request.prompt)])
     if "answer" not in response:
         response["answer"] = "No Response received"
+
+    # Completion-Metrik hochzählen
+    COMPLETION_COUNT.inc()
+
+    # (Optional) Token-Usage-Tracking
+    # if "usage" in response and "tokens" in response["usage"]:
+    #     TOKEN_USAGE.labels("some_model").inc(response["usage"]["tokens"])
 
     logger.info(f"💡 Response (preview): {response['answer'][:80]}...")
 
@@ -179,7 +268,7 @@ async def completions(
         return _resp_sync_completions(response, request)
 
 # ------------------------------------------------------------------
-#   10) Modelle abfragen
+#   12) Modelle abfragen
 # ------------------------------------------------------------------
 @app.get("/models")
 def return_models():
@@ -193,8 +282,18 @@ async def get_model(model_id: str):
     return filtered_entries[0]
 
 # ------------------------------------------------------------------
-#   11) App-Start via uvicorn.run()
-#       -> Ggf. mehrere Worker in Produktion
+#   13) /metrics Endpoint für Prometheus
+# ------------------------------------------------------------------
+@app.get("/metrics")
+def metrics():
+    """
+    Endpoint, der die Prometheus-Metriken zurückgibt.
+    Von Prometheus unter http://<host>:<port>/metrics abgefragt.
+    """
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+# ------------------------------------------------------------------
+#   14) App-Start via uvicorn.run()
 # ------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
