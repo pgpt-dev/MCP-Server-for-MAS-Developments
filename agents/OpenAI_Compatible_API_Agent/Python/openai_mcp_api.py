@@ -1,65 +1,48 @@
 import asyncio
-import json
-import time
 import logging
 from pathlib import Path
 from typing import Optional, List
-from threading import local
 
-import tiktoken
+from fastapi import FastAPI, Request, HTTPException, Header, Depends
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from starlette.responses import StreamingResponse
-from fastapi import FastAPI, Request, HTTPException
 
-# --- Setup Standard Logging ---
+# ------------------------------------------------------------------
+#   1) Logging: Log-Level konfigurierbar, Minimalkonfiguration
+# ------------------------------------------------------------------
 logging.basicConfig(
-    level=logging.INFO,  # Set to WARNING or ERROR in production
+    level=logging.INFO,  # Für Produktion ggf. WARNING oder ERROR
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# --- Import Required Modules ---
-# WARNING: Adjust the import paths based on your project structure.
-from agents.OpenAI_Compatible_API_Agent.Python.open_ai_helper import (
-    ChatInstance,
-    ChatCompletionRequest,
-    CompletionRequest,
-    _resp_sync,
-    _resp_async_generator,
-    models,
-    Message,
-    _resp_async_generator_completions,
-    _resp_sync_completions
-)
-from ...AgentInterface.Python.agent import PrivateGPTAgent
-from ...AgentInterface.Python.config import Config, ConfigError
-
-# Initialize FastAPI Application
-app = FastAPI(title="OpenAI-Compatible API for PrivateGPT using MCP")
-
-# Thread-local context storage for request headers
-request_context = local()
-
-# --- OPTIMIZATION: Use Dictionary Instead of List for Instances (O(1) lookup) ---
-instances = {}
-
-# Load Configuration
+# ------------------------------------------------------------------
+#   2) Konfiguration laden
+# ------------------------------------------------------------------
 try:
-    config_file = Path.absolute(Path(__file__).parent.parent / "pgpt_openai_api_mcp.json")
-    config = Config(
-        config_file=config_file,
-        required_fields=["email", "password", "mcp_server"]
-    )
+    from ...AgentInterface.Python.config import Config, ConfigError
+    config_file = Path(__file__).parent.parent / "pgpt_openai_api_mcp.json"
+    config_file = Path.absolute(config_file)
+    config = Config(config_file=config_file, required_fields=["email", "password", "mcp_server"])
     logger.info(f"Configuration loaded: {config}")
 except ConfigError as e:
     logger.error(f"Configuration Error: {e}")
     exit(1)
 
-# --- OPTIMIZATION: Load a Global PrivateGPTAgent Instance (if state is not user-specific) ---
-GLOBAL_AGENT = PrivateGPTAgent(config)
-logger.info("Global PrivateGPTAgent instance initialized.")
+# ------------------------------------------------------------------
+#   3) Globaler Agent (nur eine Instanz)
+# ------------------------------------------------------------------
+try:
+    from ...AgentInterface.Python.agent import PrivateGPTAgent
+    GLOBAL_AGENT = PrivateGPTAgent(config)
+    logger.info("Global PrivateGPTAgent instance initialized.")
+except Exception as e:
+    logger.error(f"Error initializing global agent: {e}")
+    exit(1)
 
-# Data Models for Requests
+# ------------------------------------------------------------------
+#   4) Benötigte Klassen/Modelle
+# ------------------------------------------------------------------
 class Message(BaseModel):
     role: str
     content: str
@@ -71,101 +54,122 @@ class ChatCompletionRequest(BaseModel):
     temperature: Optional[float] = 0.1
     stream: Optional[bool] = False
 
-# Middleware to Store Request Headers for Later Use
-@app.middleware("http")
-async def store_request_headers(request: Request, call_next):
-    request_context.headers = dict(request.headers)
-    response = await call_next(request)
-    return response
+# (Optional) CompletionRequest, falls benötigt
+from agents.OpenAI_Compatible_API_Agent.Python.open_ai_helper import (
+    CompletionRequest,
+    _resp_sync,
+    _resp_async_generator,
+    _resp_async_generator_completions,
+    _resp_sync_completions,
+    models
+)
 
-# Endpoint: Chat Completions
+# ------------------------------------------------------------------
+#   5) Asynchroner Aufruf des Agenten via Thread-Pool
+# ------------------------------------------------------------------
+from concurrent.futures import ThreadPoolExecutor
+
+executor = ThreadPoolExecutor(max_workers=4)
+
+async def async_respond(agent: PrivateGPTAgent, messages: List[Message]) -> dict:
+    """
+    Führt den blockierenden respond_with_context-Aufruf in einem Threadpool aus,
+    um den Haupt-Eventloop nicht zu blockieren.
+    """
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(executor, agent.respond_with_context, messages)
+
+# ------------------------------------------------------------------
+#   6) FastAPI-App erstellen
+# ------------------------------------------------------------------
+app = FastAPI(title="OpenAI-Compatible API for PrivateGPT using MCP")
+
+# ------------------------------------------------------------------
+#   7) Whitelist-Prüfung via Dependency
+#       -> Gibt bei invalidem Key sofort HTTPException (401) zurück
+# ------------------------------------------------------------------
+def verify_api_key(authorization: str = Header(None)) -> str:
+    if not authorization:
+        # Kein Authorization-Header
+        raise HTTPException(status_code=401, detail="Missing Authorization header")
+
+    try:
+        scheme, token = authorization.split(" ")
+        if scheme.lower() != "bearer":
+            raise HTTPException(status_code=401, detail="Authorization scheme must be 'Bearer'")
+    except ValueError:
+        raise HTTPException(status_code=401, detail="Invalid Authorization header format")
+
+    # Ggf. Whitelisting
+    whitelist_keys = config.get("whitelist_keys", [])
+    if len(whitelist_keys) > 0 and token not in whitelist_keys:
+        # Key ist nicht in der Whitelist
+        logger.warning(f"Invalid API key: {token}")
+        raise HTTPException(status_code=401, detail="API Key not valid")
+
+    return token
+
+# ------------------------------------------------------------------
+#   8) Chat-Completions Endpoint
+# ------------------------------------------------------------------
 @app.post("/chat/completions")
-async def chat_completions(request: ChatCompletionRequest):
-    headers = getattr(request_context, "headers", {})
-    client_api_key = str(headers['authorization']).split(" ")[1]
+async def chat_completions(
+    request: ChatCompletionRequest,
+    client_api_key: str = Depends(verify_api_key)
+):
+    """
+    Beispielhafter Endpoint für Chat Completion.
+    Nutzt GLOBAL_AGENT und führt die Logik asynchron aus.
+    """
     logger.info(f"[/chat/completions] Request received with API key: {client_api_key}")
 
-    if request.messages:
-        # Retrieve or Create Chat Instance
-        if client_api_key in instances:
-            pgpt = instances[client_api_key].agent
-        else:
-            # Check if API key is in the whitelist (if applicable)
-            whitelist_keys = config.get("whitelist_keys", [])
-            if len(whitelist_keys) > 0 and client_api_key not in whitelist_keys:
-                response = {
-                    "chatId": "0",
-                    "answer": "API Key not valid",
-                }
-                logger.warning(f"Invalid API key: {client_api_key}")
-                if request.stream:
-                    return StreamingResponse(
-                        _resp_async_generator(response, request),
-                        media_type="application/x-ndjson"
-                    )
-                else:
-                    return _resp_sync(response, request)
+    # Kein messages-Array => Fehler/Leere Antwort
+    if not request.messages:
+        response = {"chatId": "0", "answer": "No input provided"}
+        logger.warning("No messages provided.")
+        # Direkte Sync-Antwort
+        return _resp_sync(response, request)
 
-            # Use global agent instead of creating a new one
-            pgpt = GLOBAL_AGENT
-            instances[client_api_key] = ChatInstance(client_api_key, pgpt)
-            logger.info(f"New chat instance created for API key {client_api_key}.")
+    # Beispiel: asynchrone Agent-Antwort im Thread-Pool
+    response = await async_respond(GLOBAL_AGENT, request.messages)
+    if "answer" not in response:
+        response["answer"] = "No Response received"
 
-        # Generate response
-        response = pgpt.respond_with_context(request.messages)
-        if "answer" not in response:
-            response["answer"] = "No Response received"
-    else:
-        response = {
-            "chatId": "0",
-            "answer": "No input provided",
-        }
+    # Etwas Log (vorsichtshalber nur kürzerer Preview):
+    preview_len = 80
+    logger.info(f"💡 Response (preview): {response['answer'][:preview_len]}...")
 
-    logger.info(f"💡 Response (preview): {response['answer'][:80]}...")
+    # Bei stream = True => StreamingResponse
     if request.stream:
         return StreamingResponse(
-            _resp_async_generator(response, request), 
+            _resp_async_generator(response, request),
             media_type="application/x-ndjson"
         )
     else:
         return _resp_sync(response, request)
 
-# Endpoint: Text Completions
+# ------------------------------------------------------------------
+#   9) Text-Completions Endpoint
+# ------------------------------------------------------------------
 @app.post("/completions")
-async def completions(request: CompletionRequest):
-    headers = getattr(request_context, "headers", {})
-    client_api_key = str(headers['authorization']).split(" ")[1]
+async def completions(
+    request: CompletionRequest,
+    client_api_key: str = Depends(verify_api_key)
+):
     logger.info(f"[/completions] Request received with API key: {client_api_key}")
 
-    if request.prompt:
-        # Check if API key is in the whitelist (if applicable)
-        whitelist_keys = config.get("whitelist_keys", [])
-        if len(whitelist_keys) > 0 and client_api_key not in whitelist_keys:
-            response = {
-                "chatId": "0",
-                "answer": "API Key not valid",
-            }
-            logger.warning(f"Invalid API key: {client_api_key}")
-            if request.stream:
-                return StreamingResponse(
-                    _resp_async_generator(response, request),
-                    media_type="application/x-ndjson"
-                )
-            else:
-                return _resp_sync(response, request)
+    if not request.prompt:
+        response = {"chatId": "0", "answer": "No input provided"}
+        logger.warning("No prompt provided.")
+        return _resp_sync(response, request)
 
-        # Use global agent instead of creating a new one
-        pgpt = GLOBAL_AGENT
-        response = pgpt.respond_with_context([Message(role="user", content=request.prompt)])
-        if "answer" not in response:
-            response["answer"] = "No Response received"
-    else:
-        response = {
-            "chatId": "0",
-            "answer": "No input provided",
-        }
+    # Asynchron im Thread-Pool (blocking -> non-blocking)
+    response = await async_respond(GLOBAL_AGENT, [Message(role="user", content=request.prompt)])
+    if "answer" not in response:
+        response["answer"] = "No Response received"
 
     logger.info(f"💡 Response (preview): {response['answer'][:80]}...")
+
     if request.stream:
         return StreamingResponse(
             _resp_async_generator_completions(response, request),
@@ -174,26 +178,28 @@ async def completions(request: CompletionRequest):
     else:
         return _resp_sync_completions(response, request)
 
-# Endpoint: Retrieve Available Models
+# ------------------------------------------------------------------
+#   10) Modelle abfragen
+# ------------------------------------------------------------------
 @app.get("/models")
 def return_models():
-    return {
-        "object": "list",
-        "data": models
-    }
+    return {"object": "list", "data": models}
 
-@app.get('/models/{model_id}')
+@app.get("/models/{model_id}")
 async def get_model(model_id: str):
-    filtered_entries = list(filter(lambda item: item["id"] == model_id, models))
-    entry = filtered_entries[0] if filtered_entries else None
-    if entry is None:
+    filtered_entries = [m for m in models if m["id"] == model_id]
+    if not filtered_entries:
         raise HTTPException(status_code=404, detail="Model not found")
-    return entry
+    return filtered_entries[0]
 
-# Start FastAPI Server
+# ------------------------------------------------------------------
+#   11) App-Start via uvicorn.run()
+#       -> Ggf. mehrere Worker in Produktion
+# ------------------------------------------------------------------
 if __name__ == "__main__":
     import uvicorn
     api_ip = config.get("api_ip", "0.0.0.0")
     api_port = config.get("api_port", 8002)
     logger.info(f"Starting API on http://{api_ip}:{api_port}")
+    # workers=4, wenn man mehrere Prozesse möchte (Skalierung)
     uvicorn.run(app, host=api_ip, port=int(api_port))
