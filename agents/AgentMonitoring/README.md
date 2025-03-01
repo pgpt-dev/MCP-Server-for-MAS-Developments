@@ -18,7 +18,7 @@ To monitor the three different **agents**, each providing Prometheus metrics so 
 
 ## 1. OpenAI-Compatible API Agent
 - By default, runs on **port 7777**.
-- Uses something like `start_http_server(7777)` or a WSGI approach to serve `/metrics` at **`http://<host>:7777/metrics`**.
+- `/metrics` will be served at **`http://<host>:7777/metrics`**.
 
 ### How to Start
 Switch to the agent’s directory and start the agent as desribed in the agent's `README.md`
@@ -135,7 +135,7 @@ scrape_configs:
 > - **`5001`** (Chatbot)  
 > - **`9101`** (IoT)
 
-Once Prometheus is running (e.g., via Docker or binary), navigate to `http://<prometheus-host>:9090/targets` and confirm all three jobs appear and show **UP**.
+Once Prometheus is running (e.g., via Docker or binary), navigate to `http://<prometheus-host>:9090/targets` and confirm all three jobs appear and show **UP**:
 
 ![Prometheus Targets Example](images/Prometheus.png)
 
