@@ -137,6 +137,8 @@ scrape_configs:
 
 Once Prometheus is running (e.g., via Docker or binary), navigate to `http://<prometheus-host>:9090/targets` and confirm all three jobs appear and show **UP**.
 
+![Prometheus Targets Example](/images/Prometheus.png)
+
 ---
 
 ## 5. Grafana Dashboards
