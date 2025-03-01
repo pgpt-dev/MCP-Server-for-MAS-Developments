@@ -168,6 +168,8 @@ This repo provides **Grafana Dashboard JSON** files for each agent. You can impo
 3. Select your Prometheus data source.
 4. Save the dashboard.
 
+Example below:
+
 ![Grafana Chatbot Example](images/Grafana.png)
 
 ### C) IoT MQTT Agent Dashboard
