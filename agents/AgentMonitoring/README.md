@@ -1,129 +1,111 @@
 # README
 
-## Übersicht
-In diesem Repository befinden sich drei unterschiedliche **Agents**, die jeweils Prometheus-Metriken bereitstellen, damit sie in **Prometheus** und **Grafana** überwacht werden können:
+## Overview
+This repository contains three different **agents**, each providing Prometheus metrics so they can be monitored in **Prometheus** and visualized in **Grafana**:
 
 1. **OpenAI-Compatible API Agent**  
-   - Läuft standardmäßig auf **Port 7777** und stellt `/metrics` bereit.  
+   - Typically runs on **port 7777** and serves `/metrics`.
 2. **Chatbot Agent**  
-   - Läuft auf **Port 5001** und stellt `/metrics` bereit (oder kann, je nach Code, den Port aus einer JSON-Konfiguration lesen).  
+   - Runs on **port 5001** (by default), and also exposes `/metrics` (or configurable via JSON).
 3. **IoT MQTT Agent**  
-   - Läuft auf einem konfigurierten **Prometheus-Port**, z. B. **9101**, mit einem eigenen WSGI-Server.
+   - Runs on a **Prometheus port** specified in its JSON config (e.g., `9101`), providing `/metrics` via a custom WSGI server.
 
-### Voraussetzungen
-
-- Du benötigst **Python 3.8+** (empfohlen Python 3.10 oder höher).
-- Installiere die Abhängigkeiten der drei Agents (z. B. via `pip install -r requirements.txt` oder Poetry – je nachdem, wie dein Projekt strukturiert ist).  
-  - Wichtige Bibliothek: **`prometheus_client`** (z. B. `pip install prometheus_client`), damit die Metriken exportiert werden können.
-- Du benötigst **Prometheus** und **Grafana**, um die gesammelten Daten zu visualisieren.
+### Requirements
+- **Python 3.8+** is recommended (e.g., Python 3.10).
+- Install each agent’s dependencies (e.g., via `pip install -r requirements.txt`), including the **`prometheus_client`** library.
+- You need **Prometheus** and **Grafana** set up to ingest and display these metrics.
 
 ---
 
 ## 1. OpenAI-Compatible API Agent
+- By default, runs on **port 7777**.
+- Uses something like `start_http_server(7777)` or a WSGI approach to serve `/metrics` at **`http://<host>:7777/metrics`**.
 
-- Dieser Agent läuft typischerweise auf **Port 7777** (siehe Code/Config).  
-- Er nutzt `start_http_server(7777)` (bzw. einen WSGI-Server) und stellt **Prometheus**-kompatible Metriken unter `http://<host>:7777/metrics` bereit.  
-
-### Starten
-
+### How to Start
 ```bash
-# Wechsle in das Verzeichnis des Agents, z. B.
+# Switch to the agent’s directory, e.g.
 cd openai_compatible_api_agent
 
-# Starte den Agenten
+# Start the agent
 python main_openai_api.py
 ```
 
-Wenn alles klappt, siehst du im Log eine Meldung wie:
+You should see in the logs something like:
 ```
 Starting API on http://0.0.0.0:7777
 Starting Prometheus metrics server on port 7777...
 ```
-(oder Ähnlich)
 
-### Metriken
-- Typische Metriken könnten sein:  
-  - `request_count{method,endpoint}`  
-  - `request_latency_seconds{method,endpoint}`  
-  - `chat_completion_count`  
-  - `completion_count`  
-  - etc.  
+### Metrics
+- Typical metrics might include:
+  - `request_count{method,endpoint}`
+  - `request_latency_seconds{method,endpoint}`
+  - `chat_completion_count`
+  - `completion_count`
+  - etc.
 
 ---
 
 ## 2. Chatbot Agent
+- Runs on **port 5001** by default.
+- Also serves Prometheus metrics under **`http://<host>:5001/metrics`** (or whichever port is in use).
 
-- Läuft standardmäßig auf **Port 5001** (siehe Code/Config).  
-- Auch hier wird (je nach Code) ein Prometheus-Server in einem Thread gestartet, der `http://<host>:5001/metrics` ausgibt.  
-
-### Starten
-
+### How to Start
 ```bash
 cd chatbot_agent
 python chatbot_main.py
 ```
 
-Du siehst im Log:
+You’ll see logs like:
 ```
-Starte API-Server auf 0.0.0.0:5001
+Starting API server on 0.0.0.0:5001
 Starting Prometheus WSGI server on port 5001...
 ```
-Dann ist `/metrics` verfügbar.
+Then `/metrics` is accessible.
 
-### Metriken
-- Typische Metriken in diesem Chatbot:
+### Metrics
+- Common metrics:
   - `request_count` / `request_latency_seconds`
-  - `chat_completion_count`, `agent_ask_count`
-  - etc.  
+  - `agent_ask_count`
+  - etc.
 
 ---
 
 ## 3. IoT MQTT Agent
+- Reads a **port** from its JSON config (`pgpt_iot_agent.json`), e.g.:
 
-- Im Code wird oft ein konfigurierter **Port** aus einer JSON-Datei (`pgpt_iot_agent.json`) gelesen, z. B.:
-
-```json
-{
-  "metrics": {
-    "port": 9101
+  ```json
+  {
+    "metrics": {
+      "port": 9101
+    }
+    ...
   }
-  ...
-}
-```
+  ```
 
-- Der Agent startet einen kleinen WSGI-Server auf diesem `metrics.port` und liefert die `/metrics`.  
-- Im Code sieht das ungefähr so aus:
+- The agent starts a small WSGI server on `metrics.port` and exposes `/metrics`.
 
-```python
-# iot_mqtt_agent.py
-if 'metrics' in config and 'port' in config['metrics']:
-    prom_port = config['metrics']['port']
-    # Start WSGI...
-```
-
-### Starten
-
+### How to Start
 ```bash
 cd iot_mqtt_agent
 python iot_mqtt_agent.py --config pgpt_iot_agent.json
 ```
 
-Im Log kannst du dann sehen:
+Logs should show:
 ```
 Starting Prometheus WSGI server on port 9101...
 ```
-D. h. `http://<host>:9101/metrics` liefert die Metriken.
+Hence `http://<host>:9101/metrics` gives the metrics.
 
-### Metriken
-- Z. B.:
-  - `mqtt_message_count` (Anzahl empfangener MQTT-Nachrichten)  
-  - `mqtt_message_latency_seconds` (Histogramm zur Bearbeitungszeit)  
+### Metrics
+- For example:
+  - `mqtt_message_count` (number of MQTT messages received)
+  - `mqtt_message_latency_seconds` (histogram measuring processing latency)
 
 ---
 
-## 4. Prometheus konfigurieren
-
-Damit Prometheus all diese Metriken abfragt, musst du in deiner **`prometheus.yml`** jeweils **Targets** eintragen, die auf die Ports der drei Agents zeigen. Beispiel:
+## 4. Prometheus Configuration
+To let Prometheus scrape these metrics, add **targets** for all three agents in your `prometheus.yml`. For example:
 
 ```yaml
 global:
@@ -137,122 +119,105 @@ scrape_configs:
     scrape_interval: 5s
     static_configs:
       - targets:
-          - "192.168.100.185:7777"  # oder "localhost:7777"
+          - "192.168.100.185:7777"  # or localhost:7777
 
   # 2) Chatbot Agent
   - job_name: "chatbot_agent"
     scrape_interval: 5s
     static_configs:
       - targets:
-          - "192.168.100.185:5001"  # Dein Chatbot-Port
+          - "192.168.100.185:5001"  # your chatbot port
 
   # 3) IoT MQTT Agent
   - job_name: "iot_mqtt_agent"
     scrape_interval: 5s
     static_configs:
       - targets:
-          - "192.168.100.185:9101"  # Dein IoT Agent Port
+          - "192.168.100.185:9101"  # your IoT agent port
 ```
 
-> Passe **`192.168.100.185`** an deine Umgebung an (oder verwende `localhost`, wenn alles lokal läuft).  
-> Achte auf die Ports:
-> - `7777` (OpenAI-Compatible),
-> - `5001` (Chatbot),
-> - `9101` (IoT).  
+> Change **`192.168.100.185`** to your actual IP or hostname; use `localhost` if everything is local.  
+> And verify the ports:  
+> - **`7777`** (OpenAI-Compatible)  
+> - **`5001`** (Chatbot)  
+> - **`9101`** (IoT)
 
-Starte Prometheus (z. B. per Docker oder direktem Binary). Nach kurzer Zeit solltest du in `http://<prometheus-host>:9090/targets` sehen, dass alle drei Jobs auftauchen und der Status **UP** ist.
+Once Prometheus is running (e.g., via Docker or binary), navigate to `http://<prometheus-host>:9090/targets` and confirm all three jobs appear and show **UP**.
 
 ---
 
-## 5. Grafana-Dashboards
-
-In diesem Repo gibt es zu jedem Agent ein **Grafana-Dashboard** (JSON-Datei), die du importieren kannst.  
+## 5. Grafana Dashboards
+This repo provides **Grafana Dashboard JSON** files for each agent. You can import them to visualize the metrics.
 
 ### A) OpenAI-Compatible API Agent Dashboard
+- File: `dashboards/openai_agent_dashboard.json` (example)
+- Contains panels such as:
+  - *Request Count (rate)*
+  - *Request Latency (p95)*
+  - *Chat Completion Count*
+  - and more.
 
-- Datei: `dashboards/openai_agent_dashboard.json` (Beispiel)
-- Enthält Panels wie:
-  - `Request Count (rate)`
-  - `Request Latency (p95)`
-  - `Chat Completion Count`
-  - u. s. w.
-
-#### Import
-
-1. In Grafana: **"Dashboards"** → **"Import"**  
-2. Kopiere den Inhalt aus `openai_agent_dashboard.json`  
-3. Setze die Data Source (z. B. `"Prometheus"`)  
-4. Fertig!
+#### Import Procedure
+1. In Grafana: **Dashboards** → **Import**.
+2. Paste the JSON from `openai_agent_dashboard.json`.
+3. Select your **Prometheus** data source.
+4. Click **Import**.
 
 ### B) Chatbot Agent Dashboard
+- File: `dashboards/chatbot_dashboard.json`.
+- Shows metrics such as `agent_ask_count`, `request_latency_seconds`, etc.
 
-- Datei: `dashboards/chatbot_dashboard.json`  
-- Zeigt Metriken wie `agent_ask_count`, `request_latency_seconds`, etc.
-
-#### Import
-
-1. Grafana → **"Import"**  
-2. JSON einfügen  
-3. Prometheus-Data-Source wählen  
-4. Dashboard anlegen
+#### Import Steps
+1. Go to Grafana → **Import**.
+2. Paste the JSON content.
+3. Select your Prometheus data source.
+4. Save the dashboard.
 
 ### C) IoT MQTT Agent Dashboard
+- File: `dashboards/iot_mqtt_agent_dashboard.json`.
+- Example panels:
+  - Rate of MQTT messages (`rate(mqtt_message_count[1m])`)
+  - Total MQTT messages
+  - Latencies (e.g., 95th percentile for `mqtt_message_latency_seconds_bucket`)
 
-- Datei: `dashboards/iot_mqtt_agent_dashboard.json`  
-- Beispielpanels:
-  - Rate der MQTT-Nachrichten (`rate(mqtt_message_count[1m])`)
-  - Anzahl empfangener MQTT-Nachrichten (Gesamt)
-  - Latenzen (`histogram_quantile(0.95, rate(mqtt_message_latency_seconds_bucket[1m]))`)
-  - etc.
-
-#### Import
-
-Selbes Prozedere:  
-1. **"Dashboards"** → **"Import"**  
-2. JSON reinkopieren  
-3. Auf **"Prometheus"** als Data Source gehen  
-4. Speichern
+#### Import Steps
+Identical approach:
+1. **Dashboards** → **Import**.
+2. Paste JSON from `iot_mqtt_agent_dashboard.json`.
+3. Pick **Prometheus** as the data source.
 
 ---
 
-## 6. Wichtige Parameter anpassen
-
-1. **Agent-Ports**  
-   - Ändere die Ports in den JSON-Konfigurationen oder direkt im Python-Code, wenn du Kollisionen vermeiden willst.  
-   - Standard:
+## 6. Parameters to Adjust
+1. **Agent Ports**  
+   - Update ports in the respective JSON configs or Python code to avoid port collisions.  
+   - Defaults:
      - **OpenAI-Compatible**: `7777`  
      - **Chatbot**: `5001`  
-     - **IoT MQTT**: über `metrics.port` in `pgpt_iot_agent.json`, z. B. `9101`.  
+     - **IoT**: `9101` (via `metrics.port` in JSON)
 
 2. **Prometheus `prometheus.yml`**  
-   - Passe die **Targets** an die IP/Hostnamen deiner Agents an.  
-   - Eventuell änderst du `scrape_interval` (Standard: 15s).
+   - Change the **targets** to match your IP addresses/ports.  
+   - Adjust `scrape_interval` if needed (default is 15s).
 
 3. **Grafana**  
-   - Achte darauf, dass du beim Import der Dashboards im Dropdown **deine** Prometheus-Data-Source auswählst (z. B. `Prometheus (default)` oder `Prometheus-DS`).  
-   - Wenn die Panels „No data“ anzeigen, schau in **Prometheus** nach, ob die Metrics existieren.  
+   - When importing each JSON, make sure to choose **the correct Prometheus data source** if you have multiple.  
+   - If panels show “No data,” double-check that Prometheus is indeed scraping the relevant metrics.
 
 ---
 
 ## 7. Troubleshooting
-
-- **"No data"** in Grafana:
-  - Prüfe in **Prometheus** unter `/targets`, ob die drei Jobs **UP** sind.  
-  - Prüfe, ob die Metriken im Prometheus Expression Browser sichtbar sind (z. B. `mqtt_message_count`).  
-- **Port-Kollision**:
-  - Wenn einer der Ports `7777`, `5001`, `9101` schon belegt ist, passe sie in der Konfiguration an.  
-- **Authentication-Errors**:
-  - Falls der Agent `/metrics` standardmäßig mit API-Key-Auth versieht, musst du das anpassen oder `/metrics` explizit frei machen.  
-- **Docker-Umgebung**:
-  - Achte auf die IP-Adressen (z. B. `0.0.0.0`) und veröffentliche die Ports (z. B. `-p 5001:5001`).  
+- **“No data”** in Grafana:
+  - Check Prometheus at `/targets` to see if the jobs are **UP**.
+  - Check Prometheus’s expression browser for the metrics (e.g., `mqtt_message_count`).
+- **Port collisions**:
+  - If `7777`, `5001`, `9101` are already in use, adjust them in code/JSON.
+- **Authentication errors**:
+  - If the agent has an API key for `/metrics`, you may need to disable that or specifically allow `/metrics` to be unauthenticated.
+- **Docker environment**:
+  - Ensure you map the correct ports (e.g., `-p 5001:5001`) and use the correct IP addresses.
 
 ---
 
-## Fazit
-
-Mit diesen drei Agents kannst du sowohl die **LLM-spezifischen** (OpenAI-Compatible & Chatbot) als auch die **IoT-spezifischen** (MQTT Agent) Metriken erfassen und in **Grafana** darstellen.  
-
-- **Prometheus** sammelt die Daten über `/metrics`.  
-- **Grafana** visualisiert sie mithilfe der oben beschriebenen Dashboards.  
-
-Viel Erfolg beim Einsatz deiner Agents mit umfassendem Monitoring!
+## Conclusion
+With these three agents, you can gather both **LLM-related** (OpenAI-Compatible & Chatbot) and **IoT-related** (MQTT agent) metrics in **Prometheus**, then visualize everything in **Grafana** using the provided dashboards. Enjoy your fully monitored environment!
