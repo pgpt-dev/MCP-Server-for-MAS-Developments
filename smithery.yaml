@@ -1,0 +1,45 @@
+# Smithery configuration file: https://smithery.ai/docs/config#smitheryyaml
+
+startCommand:
+  type: stdio
+  configSchema:
+    # JSON Schema defining the configuration options for the MCP.
+    type: object
+    required:
+      - privateGptApiUrl
+      - apiUrl
+      - port
+      - language
+      - sslValidate
+      - pwEncryption
+      - publicKey
+      - privateKey
+    properties:
+      privateGptApiUrl:
+        type: string
+        description: The base URL of the Private GPT API.
+      apiUrl:
+        type: string
+        description: Alias for the base API URL.
+      port:
+        type: number
+        description: The port on which the MCP server runs.
+      language:
+        type: string
+        description: The language for the server's system messages.
+      sslValidate:
+        type: boolean
+        description: Validate SSL/TLS certificates.
+      pwEncryption:
+        type: boolean
+        description: If set to true, the server only accepts passwords in ciphertext.
+      publicKey:
+        type: string
+        description: Path to the server's public PEM file used for SSL/TLS.
+      privateKey:
+        type: string
+        description: Path to the server's private key file used for decryption.
+  commandFunction:
+    # A function that produces the CLI command to start the MCP on stdio.
+    |-
+    (config) => ({ command: 'node', args: ['dist/index.js'], env: { PRIVATE_GPT_API_URL: config.privateGptApiUrl, API_URL: config.apiUrl, PORT: config.port.toString(), LANGUAGE: config.language, SSL_VALIDATE: config.sslValidate.toString(), PW_ENCRYPTION: config.pwEncryption.toString(), PUBLIC_KEY: config.publicKey, PRIVATE_KEY: config.privateKey } })
