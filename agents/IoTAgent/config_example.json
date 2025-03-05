@@ -46,5 +46,8 @@
         "api_url": "http://your.chatbot.api.url/ask",
         "api_key": "your_secure_api_key"
     },
-    "languages": ["en", "de"]
+    "languages": ["en", "de"],
+    "metrics": {
+    "port": 9101
+  }
 }
