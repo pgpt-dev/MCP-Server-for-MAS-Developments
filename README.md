@@ -1,7 +1,7 @@
-![PrivateGPT MCP Server](docs/images/pGPT-MCP.png)
+![privateGPT MCP Server](docs/images/privateGPT-MCP.png)
 
 ## Table of Contents
-- [**PrivateGPT MCP Server**](#privategpt-mcp-server)
+- [**privateGPT MCP Server**](#privateGPT-mcp-server)
 - [**What is MCP?**](#what-is-mcp)
   - [Why MCP?](#why-mcp)
   - [Why Agents](#why-agents)
@@ -35,7 +35,7 @@
     2. [Check the generated encrypted password](#check-the-generated-encrypted-password)
   - [Encrypted Password Decryption Tool](#encrypted-password-decryption-tool)
     1. [Check the generated encrypted password](#check-the-generated-encrypted-password)
-- [**Feature Overview for PGPT Server**](#feature-overview-for-pgpt-server)
+- [**Feature Overview for privateGPT Server**](#feature-overview-for-privateGPT-server)
   - [1. Authentication and Authorization](#1-authentication-and-authorization)
   - [2. Chat Management](#2-chat-management)
   - [3. Group Management](#3-group-management)
@@ -96,9 +96,9 @@
 - [License](#license)
 
 
-# PrivateGPT MCP Server
-A Model Context Protocol (MCP) server implementation that allows you to use PrivateGPT as an agent for your preferred MCP client. 
-This enables seamless integration between PrivateGPT's powerful capabilities and any MCP-compatible application.
+# privateGPT MCP Server
+A Model Context Protocol (MCP) server implementation that allows you to use privateGPT as an agent for your preferred MCP client. 
+This enables seamless integration between privateGPT's powerful capabilities and any MCP-compatible application.
 
 ## What is MCP?
 MCP is an open protocol that standardizes how applications provide context to LLMs. Think of MCP like a USB-C port for AI applications. Just as USB-C provides a standardized way to connect your devices to various peripherals and accessories, MCP provides a standardized way to connect AI models to different data sources and tools.
@@ -121,8 +121,8 @@ At its core, MCP follows a client-server architecture where a host application c
 - **Remote Services**: External systems available over the internet (e.g., through APIs) that MCP servers can connect to
 
 ## Overview
-This server provides a bridge between MCP clients and the PrivateGPT API, allowing you to:
-- Chat with PrivateGPT using both public and private knowledge bases
+This server provides a bridge between MCP clients and the privateGPT API, allowing you to:
+- Chat with privateGPT using both public and private knowledge bases
 - Create and manage knowledge sources
 - Organize sources into groups
 - Control access through group-based permissions
@@ -206,7 +206,7 @@ Passwords can be encrypted using RSA (Rivest–Shamir–Adleman) public-key cryp
 
 ### Process
 1. The server administrator encrypts the client's password using the server's public key (`id_rsa_public.pem`) by executing `node security/generate_encrypted_password.js ~/.ssh/id_rsa_public.pem` and hand out the encrpyted password to the client.
-2. Alternatively: The client encrypts the password using the server's public key (`id_rsa_public.pem`) by using the `keygen` - Function. Therefore the function has to be enabled in the server's config (`pgpt.env.json`). Important: Using this function also means transmitting data via the network. Therefore, make sure that the data traffic is secure and cannot be intercepted.
+2. Alternatively: The client encrypts the password using the server's public key (`id_rsa_public.pem`) by using the `keygen` - Function. Therefore the function has to be enabled in the server's config (`privateGPT.env.json`). Important: Using this function also means transmitting data via the network. Therefore, make sure that the data traffic is secure and cannot be intercepted.
 3. Finally, the encrypted password is sent to the server, where it is decrypted using the server's private key.
 
 ### Advantages
@@ -269,7 +269,7 @@ To prevent misuse of the system, key generation (`keygen`) is restricted:
 
 ## 7. Certificate-Based Access Control (CBAC)
 - As the agent does not require a password when certificate authentication is activated and logs on to the server using a key, it is automatically locked to this server. 
-If it would want to log in to another MCP PGPT server, this login attempt is rejected as the key is checked against the server's private certificate. 
+If it would want to log in to another MCP privateGPT server, this login attempt is rejected as the key is checked against the server's private certificate. 
 
 ### Features
 - Functions such as `keygen`, `store_user`, and `edit_source` are only accessible to authorized roles.
@@ -310,8 +310,8 @@ The implemented security features ensure:
 These measures collectively provide a secure environment for client-server communication and data handling.
 
 
-# Feature Overview for PGPT Server
-The PGPT Server offers a robust set of features designed to provide efficient, flexible, and secure communication with the Model Context Protocol (MCP). Below is an overview of the key features and functionalities available in the server.
+# Feature Overview for privateGPT Server
+The privateGPT Server offers a robust set of features designed to provide efficient, flexible, and secure communication with the Model Context Protocol (MCP). Below is an overview of the key features and functionalities available in the server.
 
 ---
 
@@ -387,8 +387,8 @@ The PGPT Server offers a robust set of features designed to provide efficient, f
 ---
 
 ### How to Use
-1. Copy the `pgpt.env.json.example` file to `pgpt.env.json` e.g. with  `cp .\pgpt.env.json.example .\pgpt.env.json`
-2. Configure the server by editing the `pgpt.env.json` file.
+1. Copy the `privateGPT.env.json.example` file to `privateGPT.env.json` e.g. with  `cp .\privateGPT.env.json.example .\privateGPT.env.json`
+2. Configure the server by editing the `privateGPT.env.json` file.
 3. Start the server using the provided script.
 4. Interact with the server via API calls to utilize its features.
 
@@ -396,13 +396,13 @@ Refer to the **API Documentation** for detailed usage instructions and examples 
 
 ---
 
-The PGPT Server is a powerful tool for managing structured communication and data in a customizable environment. Tailor its features to your needs for maximum efficiency and control.
+The privateGPT Server is a powerful tool for managing structured communication and data in a customizable environment. Tailor its features to your needs for maximum efficiency and control.
 
 
 ## Installation
 1. Clone the repository:
 ```bash
-git clone https://github.com/pgpt-dev/MCP-Server-for-MAS-Developments.git
+git clone https://github.com/privateGPT-dev/MCP-Server-for-MAS-Developments.git
 cd MCP-Server-for-MAS-Developments
 ```
 
@@ -485,7 +485,7 @@ The custom header value used for proxy authentication or access control. If `HEA
 ---
 
 ### Server Configuration
-For secure certificate authentification, create a `.env` file with your PrivateGPT credentials, for example pgpt.env.json 
+For secure certificate authentification, create a `.env` file with your privateGPT credentials, for example privateGPT.env.json 
 Settings can be adjusted in the `.env` file to customize the server and its functionalities.
 
 Generate the certificates (if you haven't ssh certificates use `ssh-keygen -t rsa`), .pem files are needed:
@@ -507,7 +507,7 @@ Note: Clients and agents can detect that the server uses self-signed certificate
 
 ---
 
-Below is a sample `.env` configuration file for the PGPT server, including descriptions for each setting. 
+Below is a sample `.env` configuration file for the privateGPT server, including descriptions for each setting. 
 Customize these values to fit your environment and requirements.
 
 ---
@@ -521,7 +521,7 @@ Customize these values to fit your environment and requirements.
 
 ## `Language`
 The system supports out-of-the-box: `de`, `en`, `pt`, `es`, `nl`, `fr`.
-Every Language can be easily added by modifying the `pgpt-messages.js`. This file should be stored after the modification in `/src` as well as in `/dist`.
+Every Language can be easily added by modifying the `privateGPT-messages.js`. This file should be stored after the modification in `/src` as well as in `/dist`.
 
 | Key        | Description                                                         | Example Value |
 |------------|---------------------------------------------------------------------|---------------|
@@ -605,9 +605,9 @@ Control the availability of individual server functions. Set the corresponding v
 Example `.env` entry:
 ```dotenv
 {
-    "PGPT_Url": {
-        "PRIVATE_GPT_API_URL": "https://<YOUR_PGPT_URL>/api/v1",
-        "API_URL": "https://<YOUR_PGPT_URL>/api/v1"
+    "privateGPT_Url": {
+        "PRIVATE_GPT_API_URL": "https://<YOUR_privateGPT_URL>/api/v1",
+        "API_URL": "https://<YOUR_privateGPT_URL>/api/v1"
     },
     "Proxy_Config": {
         "USE_PROXY": "true",
@@ -841,12 +841,12 @@ MCP-Server-for-MAS-Developments/
 ├── dist
 │   └── public
 │       ├── index.html
-│       └── pgpt-mcp-logo.png
+│       └── privateGPT-mcp-logo.png
 ├── docs
 │   └── images
 │       ├── alternative mcp client.png
 │       ├── mcp-general-architecture.png
-│       └── pGPT-MCP.png
+│       └── privateGPT-MCP.png
 ├── logs
 ├── security
 │   ├── generate_decrypted_password.js
@@ -854,12 +854,12 @@ MCP-Server-for-MAS-Developments/
 ├── src
 │   ├── index.js
 │   ├── logger.js
-│   ├── pgpt-messages.js
+│   ├── privateGPT-messages.js
 │   ├── public
 │   │   ├── index.html
-│   │   └── pgpt-mcp-logo.png
+│   │   └── privateGPT-mcp-logo.png
 │   ├── services
-│   │   └── pgpt-service.ts
+│   │   └── privateGPT-service.ts
 │   └── types
 │       └── api.ts
 ├── tests
