@@ -1,4 +1,0 @@
-logging
-waitress
-flask
-flask_cors
